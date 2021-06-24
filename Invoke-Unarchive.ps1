@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.0, June 23rd, 2021
+    Version 1.01, June 24rd, 2021
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -29,15 +29,18 @@
 
     .NOTES
     - Requires Exchange Server 2013 SP1 (or later) or Exchange Online
-    - Microsoft Exchange Web Services (EWS) Managed API 2.2 or up is required, 
-      see https://eightwone.com/2020/10/05/ews-webservices-managed-api
-    - OAuth requires MSAL library (Microsoft.Identity.Client.dll).
+    - Microsoft Exchange Web Services (EWS) Managed API 2.21 or up is required. This is available as NuGet package, e.g.
+      Install-Package exchange.webservices.managed.api
+      See https://eightwone.com/2020/10/05/ews-webservices-managed-api on how to add NuGet as package provider.
+    - OAuth requires MSAL library (Microsoft.Identity.Client.dll). This is also available as a NuGet package, e.g.
+      Install-Package Microsoft.Identity.Client -ProviderName NuGet
     - Search order for DLL's is script Folder then installed packages.
     - Script has not been tested with mixed locality, e.g. primary mailboxes on-premises with Exchange Online archives.
 
     Revision History
     --------------------------------------------------------------------------------
     1.0     Initial release
+    1.01    Fixed loading of module when using installed NuGet packages
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -202,8 +205,8 @@ begin {
         Else {
             If( $Package) {
                 If( Get-Command -Name Get-Package -ErrorAction SilentlyContinue) {
-                    If( Get-Package -Name $Name -ErrorAction SilentlyContinue) {
-                        $AbsoluteFileName= (Get-ChildItem -ErrorAction SilentlyContinue -Path (Split-Path -Parent (get-Package -Name $Package | -Object -Property Version -Descending | Select-Object -First 1).Source) -Filter $FileName -Recurse).FullName
+                    If( Get-Package -Name $Package -ErrorAction SilentlyContinue) {
+                        $AbsoluteFileName= (Get-ChildItem -ErrorAction SilentlyContinue -Path (Split-Path -Parent (get-Package -Name $Package | Sort-Object -Property Version -Descending | Select-Object -First 1).Source) -Filter $FileName -Recurse).FullName
                     }
                 }
             }
