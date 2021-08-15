@@ -14,6 +14,6 @@ Notes:
 - Script has not been tested with mixed locality, e.g. primary mailboxes on-premises with Exchange Online archives.
 
 Example:
-    .\Invoke-Unarchive.ps1 -Identity john@contoso.com -Server outlook.office365.com -Impersonation -Secret $MySecret -TenantId $TenantId -ClientId $ClientId -Verbose
+  .\Invoke-Unarchive.ps1 -Identity john@contoso.com -Server outlook.office365.com -Impersonation -Secret $MySecret -TenantId $TenantId -ClientId $ClientId -Verbose
 
 Invokes unarchiving of contents from personal archive to primary mailbox for john@contoso.com. Authentication is OAuth using provided Tenant ID, Client ID and secret.
