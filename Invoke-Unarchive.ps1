@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.01, June 24rd, 2021
+    Version 1.02, June 29th, 2022
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -41,6 +41,7 @@
     --------------------------------------------------------------------------------
     1.0     Initial release
     1.01    Fixed loading of module when using installed NuGet packages
+    1.02    Changed check for proper loading of Microsoft.Identity.Client module
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -194,8 +195,7 @@ begin {
         param(
             [string]$Name,
             [string]$FileName,
-            [string]$Package,
-            [string]$ValidateObjName
+            [string]$Package
         )
 
         $AbsoluteFileName= Join-Path -Path $PSScriptRoot -ChildPath $FileName
@@ -231,13 +231,8 @@ begin {
                 If( $ModLoaded) {
                     Write-Verbose ('Module {0} v{1} loaded' -f $ModLoaded.Name, $ModLoaded.Version)
                 }
-                Try {
-                    If( $validateObjName) {
-                        $null= New-Object -TypeName $validateObjName
-                    }
-                }
-                Catch {
-                    Write-Error ('Problem initializing test-object from module {0}: {1}' -f $Name, $_.Exception.Message)
+                If(!( Get-Module -Name $Name -ErrorAction SilentlyContinue)) {
+                    Write-Error ('Problem loading module {0}: {1}' -f $Name, $_.Exception.Message)
                     Exit $ERR_DLLLOADING
                 }
             }
@@ -818,9 +813,9 @@ begin {
     }
 
     ### MAIN ROUTINE ###
-   
-    Import-ModuleDLL -Name 'Microsoft.Exchange.WebServices' -FileName 'Microsoft.Exchange.WebServices.dll' -Package 'Exchange.WebServices.Managed.Api' -validateObjName 'Microsoft.Exchange.WebServices.Data.ExchangeVersion'
-    Import-ModuleDLL -Name 'Microsoft.Identity.Client' -FileName 'Microsoft.Identity.Client.dll' -Package 'Microsoft.Identity.Client' -validateObjName 'Microsoft.Identity.Client.TokenCache'
+
+    Import-ModuleDLL -Name 'Microsoft.Exchange.WebServices' -FileName 'Microsoft.Exchange.WebServices.dll' -Package 'Exchange.WebServices.Managed.Api'
+    Import-ModuleDLL -Name 'Microsoft.Identity.Client' -FileName 'Microsoft.Identity.Client.dll' -Package 'Microsoft.Identity.Client'
 
     $ExchangeVersion= [Microsoft.Exchange.WebServices.Data.ExchangeVersion]::Exchange2013_SP1
     $EwsService= [Microsoft.Exchange.WebServices.Data.ExchangeService]::new( $ExchangeVersion)
