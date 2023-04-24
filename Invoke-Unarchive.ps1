@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.02, June 29th, 2022
+    Version 1.03, April 24th, 2023
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -42,6 +42,9 @@
     1.0     Initial release
     1.01    Fixed loading of module when using installed NuGet packages
     1.02    Changed check for proper loading of Microsoft.Identity.Client module
+    1.03    Added NoSCP switch
+            Setting TimeZone when connecting, required for EXO
+            Added ExchangeSchema parameter
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -49,6 +52,15 @@
     .PARAMETER Server
     Exchange Client Access Server to use for Exchange Web Services. When ommited, script will use Autodiscover
     to discover the endpoint to use.
+
+    .PARAMETER NoSCP
+    Will instruct to skip SCP lookups in Active Directory when using Autodiscover.
+
+    .PARAMETER ExchangeSchema 
+    Specify Exchange schema to use when connecting to Exchange server or Exchange Online.
+    Options are Exchange2007_SP1, Exchange2010, Exchange2010_SP1, Exchange2010_SP2, Exchange2013, Exchange2013_SP1, 
+    Exchange2015 or Exchange2016. Default is Exchange2013_SP1, except when you specified the server parameter as 
+    'outlook.office365.com', in which case it will be set to Exchange2016 for Exchange Online compatibility reasons.
 
     .PARAMETER IncludeRecoverableItems
     Instructs script to include moving items back from the deletions in RecoverableItems.
@@ -124,6 +136,17 @@ param(
     [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertFile')] 
     [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertSecret')] 
     [parameter( Mandatory= $false, ParameterSetName= 'BasicAuth')] 
+    [switch]$NoSCP,
+    [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertThumb')] 
+    [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertFile')] 
+    [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertSecret')] 
+    [parameter( Mandatory= $false, ParameterSetName= 'BasicAuth')] 
+    [ValidateSet( 'Exchange2007_SP1', 'Exchange2010', 'Exchange2010_SP1', 'Exchange2010_SP2', 'Exchange2013', 'Exchange2013_SP1', 'Exchange2015', 'Exchange2016' )]
+    [string]$ExchangeSchema='Exchange2013_SP1',
+    [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertThumb')] 
+    [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertFile')] 
+    [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertSecret')] 
+    [parameter( Mandatory= $false, ParameterSetName= 'BasicAuth')] 
     [switch]$Impersonation,
     [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertThumb')] 
     [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertFile')] 
@@ -174,9 +197,9 @@ begin {
     # Process items in these page sizes
     $script:ItemBatchSize= @{ Min=10; Max=50; Current=50}
     # Sleep timers (ms) to backoff EWS operations
-    $script:SleepTimer= @{ Min=1000; Max=15000; Current= 1000}
+    $script:SleepTimer= @{ Min=100; Max=300000; Current= 100}
     # TuningFactors
-    $script:Factors= @{ Dec=0.8; Inc=1.5}
+    $script:Factors= @{ Dec=0.66; Inc=1.5}
 
     # Error codes
     $ERR_DLLNOTFOUND= 1000
@@ -612,7 +635,8 @@ begin {
         param(
             [Microsoft.Exchange.WebServices.Data.ExchangeService]$EwsService,
             [string]$WellKnownFolderName,
-            [string]$emailAddress
+            [string]$emailAddress,
+            [switch]$ShowVersion
         )
         $OpSuccess= $false
         $critErr= $false
@@ -621,20 +645,25 @@ begin {
                 $explicitFolder= New-Object -TypeName Microsoft.Exchange.WebServices.Data.FolderId( [Microsoft.Exchange.WebServices.Data.WellKnownFolderName]::$WellKnownFolderName, $emailAddress)  
                 $res= [Microsoft.Exchange.WebServices.Data.Folder]::Bind( $EwsService, $explicitFolder)
                 $OpSuccess= $true
+                if( $ShowVersion) {
+                    # Show Exchange build when connecting to a primary/archive/pf mailbox
+                    Write-Verbose ('Detected Exchange Server version {0}.{1}.{2}.{3} ({4}, requested schema {5})' -f $EwsService.ServerInfo.MajorVersion, $EwsService.ServerInfo.MinorVersion, $EwsService.ServerInfo.MajorBuildNumber, $EwsService.ServerInfo.MinorBuildNumber, $EwsService.ServerInfo.VersionString, $ExchangeSchema)
+                }
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
+                Write-Warning 'EWS operation failed, server busy - will retry later'
             }
             catch {
                 $OpSuccess= $false
                 $critErr= $true
-                Write-Warning ('Cannot bind to {0}: {1}' -f $WellKnownFolderName, $_.Exception.Message)
+                Write-Warning ('Cannot bind to {0}: {1}' -f $WellKnownFolderName, $Error[0])
             }
             finally {
                 If ( !$critErr) { Optimize-OperationalParameters $OpSuccess }
             }
         } while ( !$OpSuccess -and !$critErr)
+
         $res
     }
 
@@ -693,14 +722,14 @@ begin {
         $ExistingFolders= Get-SubFolders -EwsService $EwsService -Folder $Target -CurrentPath $prettyCurrentPath
 
         $ItemView= New-Object Microsoft.Exchange.WebServices.Data.ItemView( $script:ItemBatchSize['Current'])
+        $ItemView.Traversal= [Microsoft.Exchange.WebServices.Data.ItemTraversal]::Shallow
         $ItemView.PropertySet= New-Object Microsoft.Exchange.WebServices.Data.PropertySet(
             [Microsoft.Exchange.WebServices.Data.BasePropertySet]::IdOnly)
-        $ItemId= [Microsoft.Exchange.WebServices.Data.ItemId]::new( 'Bogus')
-        $ItemIdType = [Type] $itemId.GetType()
-        $genericItemIdList = [System.Collections.Generic.List``1].MakeGenericType(@( $ItemIdType))
+        $ItemType= ("System.Collections.Generic.List" + '`' + "1") -as 'Type'
+        $ItemType= $ItemType.MakeGenericType([Microsoft.Exchange.WebServices.Data.ItemId] -as 'Type')
 
         # First, collect all Item Ids
-        $ItemsToProcess= [Activator]::CreateInstance( $genericItemIdList)
+        $ItemsToProcess= [Activator]::CreateInstance( $ItemType)
         $ItemResults= myEWSFind-ItemsNoSearch -EwsService $EwsService -Folder $Source -ItemView $ItemView
         If( $ItemResults.Items.Count -gt 0) {
 
@@ -711,7 +740,7 @@ begin {
                     Write-Progress -Id 3 -Activity ('Unarchiving items in folder {0}' -f $prettyCurrentPath) -Status ('Discovered {0} items' -f $ItemsFound)
                 }
                 ForEach ( $Item in $ItemResults) {
-                    $null= $ItemsToProcess.Add( $Item.Id)
+                    $ItemsToProcess.Add( $Item.Id)
                 }
                 $ItemView.Offset += $ItemResults.Items.Count
                 $ItemResults= myEWSFind-ItemsNoSearch -EwsService $EwsService -Folder $Source -ItemView $ItemView
@@ -722,10 +751,10 @@ begin {
                 Write-Verbose ('Discovered {0} items in {1}' -f $ItemsFound, $prettyCurrentPath)
 
                 # Chop set of items in chunks to process
-                $ItemBatch= [Activator]::CreateInstance( $genericItemIdList)
+                $ItemBatch= [Activator]::CreateInstance( $ItemType)
                 $ItemsProcessed=0
                 ForEach( $Item in $ItemsToProcess) {
-                    $null= $ItemBatch.Add( $Item)
+                    $ItemBatch.Add( $Item)
                     $ItemsProcessed++
         
                     # When cut-off for items or last item in batch reached, process the subset
@@ -742,7 +771,7 @@ begin {
                                 Write-Error ('Problem unarchiving items from folder {0}: {1}' -f $prettyCurrentPath, $_.Exception.Message)
                             }
                         }
-                        $ItemBatch= [Activator]::CreateInstance( $genericItemIdList)
+                        $ItemBatch= [Activator]::CreateInstance( $ItemType)
                     }
                 } 
             }
@@ -817,12 +846,21 @@ begin {
     Import-ModuleDLL -Name 'Microsoft.Exchange.WebServices' -FileName 'Microsoft.Exchange.WebServices.dll' -Package 'Exchange.WebServices.Managed.Api'
     Import-ModuleDLL -Name 'Microsoft.Identity.Client' -FileName 'Microsoft.Identity.Client.dll' -Package 'Microsoft.Identity.Client'
 
-    $ExchangeVersion= [Microsoft.Exchange.WebServices.Data.ExchangeVersion]::Exchange2013_SP1
-    $EwsService= [Microsoft.Exchange.WebServices.Data.ExchangeService]::new( $ExchangeVersion)
+    $TZ= [System.TimeZoneInfo]::Local
+    # Override ExchangeSchema when connecting to EXO
+    If( $Server -eq 'outlook.office365.com') {
+        $ExchangeSchema= 'Exchange2016'
+    } 
+    Try {
+        $EwsService= [Microsoft.Exchange.WebServices.Data.ExchangeService]::new( [Microsoft.Exchange.WebServices.Data.ExchangeVersion]::$ExchangeSchema, [System.TimeZoneInfo]::FindSystemTimeZoneById( $TZ.Id))
+    }
+    Catch {
+        Throw( 'Problem initializing Exchange Web Services using schema {0} and TimeZone {1}' -f $ExchangeSchema, $TZ.Id)
+    }
 
-    Create-TraceListener -EwsService $EwsService
-    $EwsService.TraceFlags = [Microsoft.Exchange.WebServices.Data.TraceFlags]::All
-    $EwsService.TraceEnabled = $True
+    #Create-TraceListener -EwsService $EwsService
+    #$EwsService.TraceFlags = [Microsoft.Exchange.WebServices.Data.TraceFlags]::All
+    #$EwsService.TraceEnabled = $True
 
     If( $Credentials) {
         try {
@@ -891,6 +929,8 @@ begin {
         }
     }
 
+    $EwsService.EnableScpLookup= if( $NoSCP) { $false } else { $true }
+
     If( $TrustAll) {
         Set-SSLVerification -Disable
     }
@@ -935,7 +975,7 @@ Process {
             Write-Verbose 'Using EWS endpoint {0}' -f $EwsService.Url
         } 
 
-        $PrimaryRootFolder= myEWSBind-WellKnownFolder $EwsService 'MsgFolderRoot' $EmailAddress
+        $PrimaryRootFolder= myEWSBind-WellKnownFolder $EwsService 'MsgFolderRoot' $EmailAddress -ShowVersion
         If ($null -ne $PrimaryRootFolder) {
             $ArchiveRootFolder= myEWSBind-WellKnownFolder $EwsService 'ArchiveMsgFolderRoot' $EmailAddress
             If ($null -ne $ArchiveRootFolder) {
