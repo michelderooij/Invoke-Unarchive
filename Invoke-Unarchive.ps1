@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.03, April 24th, 2023
+    Version 1.04, April 24th, 2023
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -45,6 +45,8 @@
     1.03    Added NoSCP switch
             Setting TimeZone when connecting, required for EXO
             Added ExchangeSchema parameter
+    1.04    Fixed unarchiving batches instead of whole set of items per folder
+            Fixed detection of throttling and honoring backoff period
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -195,11 +197,13 @@ begin {
     # Process folders these batches
     $script:FolderBatchSize= @{ Min=10; Max=100; Current=100}
     # Process items in these page sizes
-    $script:ItemBatchSize= @{ Min=10; Max=50; Current=50}
+    $script:ItemBatchSize= @{ Min=10; Max=100; Current=50}
     # Sleep timers (ms) to backoff EWS operations
-    $script:SleepTimer= @{ Min=100; Max=300000; Current= 100}
+    $script:SleepTimer= @{ Min=100; Max=300000; Current= 250}
     # TuningFactors
     $script:Factors= @{ Dec=0.66; Inc=1.5}
+    # Variable holding any detected backoff period
+    $script:BackOffMilliseconds= 0
 
     # Error codes
     $ERR_DLLNOTFOUND= 1000
@@ -320,92 +324,6 @@ begin {
         }
     }
 
-    Function get-BackoffPeriod {
-        $res= 0
-        if ([String]::IsNullOrEmpty( $script:Tracer.LastResponse)) {
-            # No last response, probably not throttled ..
-        }
-        Else {
-            $Backoff = $script:Tracer.LastResponse -match ".*<t:Value Name=""BackOffMilliseconds"">(?<BackOffMilliseconds>[\d]*)<\/t:Value>.*"
-            if ($Backoff) {
-                # Throttled, we need to take a nap for as long as we're told to..
-                $res= $matches.BackoffMilliseconds
-            }
-            Else {
-                # Unknown response, probably not throttled.
-            }
-        }
-        $res
-    }
-
-    Function Create-TraceListener {
-        param(
-            [Microsoft.Exchange.WebServices.Data.ExchangeService]$EwsService
-        )
-    
-        if ($null -eq $script:Tracer) {
-
-            $Provider=New-Object Microsoft.CSharp.CSharpCodeProvider
-            $Params=New-Object System.CodeDom.Compiler.CompilerParameters
-            $Params.GenerateExecutable=$False
-            $Params.GenerateInMemory=$True
-            $Params.IncludeDebugInformation=$False
-            $Params.ReferencedAssemblies.Add("System.dll") | Out-Null
-            $EWSManagedApiPath= (Get-Module -Name Microsoft.Exchange.WebServices).Path
-            $Params.ReferencedAssemblies.Add($EWSManagedApiPath) | Out-Null
-    
-            # Create TraceLister class to store last EWS Responses
-            $TraceListenerClass = @"
-                using System;
-                using System.Text;
-                using System.IO;
-                using System.Threading;
-                using Microsoft.Exchange.WebServices.Data;
-            
-                namespace TraceListener {
-                    class EWSTracer: Microsoft.Exchange.WebServices.Data.ITraceListener
-                    {
-                        private string _lastResponse = String.Empty;
-                        public EWSTracer()
-                        {
-                        }
-                        ~EWSTracer()
-                        {
-                            Close();
-                        }
-                        public void Close()
-                        {
-                        }
-                        public void Trace(string traceType, string traceMessage)
-                        {
-                            if ( traceType.Equals("EwsResponse") )
-                                _lastResponse = traceMessage;
-                            if ( traceType.Equals("EwsRequest") )
-                                _lastResponse = String.Empty;
-                            return;
-                        }
-                        public string LastResponse
-                        {
-                            get { return _lastResponse; }
-                        }
-                    }
-                }
-"@
-
-            Try {
-                $TraceCompilation= $Provider.CompileAssemblyFromSource($Params,$TraceListenerClass)
-                $TraceAssembly= $TraceCompilation.CompiledAssembly
-                $script:Tracer= $TraceAssembly.CreateInstance( 'TraceListener.EWSTracer')
-            }
-            Catch {
-                Write-Warning ('Problem creating EWSTracer listener; we will not be able to detect throttling')
-            }
-        }
-        # Attach the trace listener to the Exchange service
-        $EwsService.TraceListener = $script:Tracer
-    }
-    
-
     Function Optimize-OperationalParameters {
         param(
             [bool]$previousResultSuccess= $false
@@ -419,7 +337,7 @@ begin {
             $waitMs= $script:SleepTimer['Current']
             If( $waitMs -gt 5000) {
                 # Only show notice when delay is over 5s
-                Write-Verbose ('Waiting for {0}ms to prevent getting throttled by showing we are a good citizen' -f $waitMs)
+                Write-Verbose ('Waiting for {0}ms to be nice to the back-end' -f $waitMs)
             }
         }
         Else {
@@ -429,7 +347,7 @@ begin {
                 $script:ItemBatchSize['Current']= [int]([math]::Max( [int]($script:ItemBatchSize['Current'] * $script:Factors['Dec']), $script:ItemBatchSize['Min']))
             }
 
-            $waitMs= get-BackoffPeriod
+            $waitMs= [int]($script:BackOffMilliseconds)
             If( $waitMs -eq 0) {
                 # Use our 'calculated' backoff period
                 $waitMs= $script:SleepTimer['Current']
@@ -440,6 +358,7 @@ begin {
             }
         }
         Start-Sleep -Milliseconds $waitMs
+        $script:BackOffMilliseconds= 0
     }
 
     Function myEWSFind-Folders {
@@ -458,7 +377,8 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.Message)
+                $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch {
                 $OpSuccess= $false
@@ -487,6 +407,7 @@ begin {
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
                 Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
+                $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch [Microsoft.Exchange.WebServices.Data.ServiceRequestException] {
                 $OpSuccess= $false
@@ -520,6 +441,7 @@ begin {
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
                 Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
+                $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch {
                 If( $_.Exception.InnerException.ErrorCode -eq 'ErrorDeleteDistinguishedFolder') {
@@ -556,6 +478,7 @@ begin {
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
                 Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
+                $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch [Microsoft.Exchange.WebServices.Data.ServiceRequestException] {
                 $OpSuccess= $false
@@ -618,6 +541,7 @@ begin {
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
                 Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
+                $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch {
                 $OpSuccess= $false
@@ -653,6 +577,7 @@ begin {
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
                 Write-Warning 'EWS operation failed, server busy - will retry later'
+                $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch {
                 $OpSuccess= $false
@@ -765,7 +690,7 @@ begin {
                         If ( $Force -or $PSCmdlet.ShouldProcess( ('Unarchiving {1} item(s) from folder {0}' -f $prettyCurrentPath, $ItemBatch.Count))) {
                             try {
                                 Write-Verbose ('Unarchiving {1}/{2} item(s) from {0}' -f $prettyCurrentPath, $ItemsProcessed, $ItemsFound)
-                                $null= myEWSMove-Items -EwsService $EwsService -ItemIds $ItemsToProcess -Folder $Target
+                                $null= myEWSMove-Items -EwsService $EwsService -ItemIds $ItemBatch -Folder $Target
                             }
                             catch {
                                 Write-Error ('Problem unarchiving items from folder {0}: {1}' -f $prettyCurrentPath, $_.Exception.Message)
@@ -857,10 +782,6 @@ begin {
     Catch {
         Throw( 'Problem initializing Exchange Web Services using schema {0} and TimeZone {1}' -f $ExchangeSchema, $TZ.Id)
     }
-
-    #Create-TraceListener -EwsService $EwsService
-    #$EwsService.TraceFlags = [Microsoft.Exchange.WebServices.Data.TraceFlags]::All
-    #$EwsService.TraceEnabled = $True
 
     If( $Credentials) {
         try {
@@ -1020,9 +941,6 @@ Process {
     }
 }
 End {
-    if ($script:Tracer -ne $null) {
-        $script:Tracer.Close()
-    }
     If( $TrustAll) {
         Set-SSLVerification -Enable
     }
