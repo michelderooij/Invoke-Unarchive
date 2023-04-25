@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.08, April 25th, 2023
+    Version 1.09, April 25th, 2023
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -51,6 +51,7 @@
     1.06    Fixed reporting of EWS error status
     1.07    Fixed logic after throttling to reset generic delay
     1.08    Further tuned calculated delays
+    1.09    Removed non-functional ExchangeSchema input options
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -64,9 +65,9 @@
 
     .PARAMETER ExchangeSchema 
     Specify Exchange schema to use when connecting to Exchange server or Exchange Online.
-    Options are Exchange2007_SP1, Exchange2010, Exchange2010_SP1, Exchange2010_SP2, Exchange2013, Exchange2013_SP1, 
-    Exchange2015 or Exchange2016. Default is Exchange2013_SP1, except when you specified the server parameter as 
-    'outlook.office365.com', in which case it will be set to Exchange2016 for Exchange Online compatibility reasons.
+    Options are Exchange2013_SP1, Exchange2015 or Exchange2016. Default is Exchange2013_SP1, except 
+    when you specified the server parameter as 'outlook.office365.com', in which case it will be 
+    set to Exchange2016 for Exchange Online compatibility reasons.
 
     .PARAMETER IncludeRecoverableItems
     Instructs script to include moving items back from the deletions in RecoverableItems.
@@ -147,7 +148,7 @@ param(
     [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertFile')] 
     [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertSecret')] 
     [parameter( Mandatory= $false, ParameterSetName= 'BasicAuth')] 
-    [ValidateSet( 'Exchange2007_SP1', 'Exchange2010', 'Exchange2010_SP1', 'Exchange2010_SP2', 'Exchange2013', 'Exchange2013_SP1', 'Exchange2015', 'Exchange2016' )]
+    [ValidateSet( 'Exchange2013_SP1', 'Exchange2015', 'Exchange2016' )]
     [string]$ExchangeSchema='Exchange2013_SP1',
     [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertThumb')] 
     [parameter( Mandatory= $false, ParameterSetName= 'OAuthCertFile')] 
