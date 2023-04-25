@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.09, April 25th, 2023
+    Version 1.10, April 25th, 2023
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -52,6 +52,7 @@
     1.07    Fixed logic after throttling to reset generic delay
     1.08    Further tuned calculated delays
     1.09    Removed non-functional ExchangeSchema input options
+    1.10    Fixed ServerBusy reporting
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
