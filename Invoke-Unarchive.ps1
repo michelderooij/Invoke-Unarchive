@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.07, April 25th, 2023
+    Version 1.08, April 25th, 2023
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -50,6 +50,7 @@
     1.05    Added progress bar for significant backoff/wait delays
     1.06    Fixed reporting of EWS error status
     1.07    Fixed logic after throttling to reset generic delay
+    1.08    Further tuned calculated delays
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -200,11 +201,11 @@ begin {
     # Process folders these batches
     $script:FolderBatchSize= @{ Min=10; Max=100; Current=100}
     # Process items in these page sizes
-    $script:ItemBatchSize= @{ Min=25; Max=250; Current=25}
+    $script:ItemBatchSize= @{ Min=10; Max=100; Current=25}
     # Sleep timers (ms) to backoff EWS operations
     $script:SleepTimer= @{ Min=100; Max=300000; Current= 250}
     # TuningFactors
-    $script:Factors= @{ Dec=0.66; Inc=1.5}
+    $script:Factors= @{ Dec=0.5; Inc=1.5}
     # Variable holding any detected backoff period
     $script:BackOffMilliseconds= 0
 
@@ -338,30 +339,27 @@ begin {
                 $script:ItemBatchSize['Current']= [int]([math]::Min( ($script:ItemBatchSize['Current'] * $script:Factors['Inc']), $script:ItemBatchSize['Max']))
             }
             $waitMs= $script:SleepTimer['Current']
-            If( $waitMs -gt 10000) {
+            If( $waitMs -gt 5000) {
                 Write-Verbose ('Waiting for {0:N0}s to be nice to the back-end' -f ($waitMs/1000))
             }
         }
         Else {
+            # Previous operation failed, see if we're throttled or need to use calculated delay
             $waitMs= [int]($script:BackOffMilliseconds)
             If( $waitMs -eq 0) {
-                # Use our 'calculated' backoff period
-
                 If( $script:SleepTimer['Current'] -lt $script:SleepTimer['Max']) {
                     $script:SleepTimer['Current']= [int]([math]::Min( ($script:SleepTimer['Current'] * $script:Factors['Inc']), $script:SleepTimer['Max']))
                     $script:FolderBatchSize['Current']= [int]([math]::Max( [int]($script:FolderBatchSize['Current'] * $script:Factors['Dec']), $script:FolderBatchSize['Min']))
                     $script:ItemBatchSize['Current']= [int]([math]::Max( [int]($script:ItemBatchSize['Current'] * $script:Factors['Dec']), $script:ItemBatchSize['Min']))
                 }
-    
-                Write-Warning ('Previous EWS operation failed, waiting for {0:N0}s' -f ($script:SleepTimer['Current']/1000))
                 $waitMs= $script:SleepTimer['Current']
+                Write-Warning ('Previous EWS operation failed, waiting for {0:N0}s' -f ($waitMs/1000))
             }
             Else {
                 Write-Warning ('Throttling detected; server requested to backoff for {0:N0}s' -f ($waitMs/1000))
-                $script:SleepTimer['Current']= $waitMs
             }
         }
-        If( $waitMS -ge 10000 -and !( $NoProgressBar)) {
+        If( $waitMS -ge 5000 -and !( $NoProgressBar)) {
             # When waiting for >10s, show a progress bar
             $WaitUnit= [uint]($waitMS/10)
             1..10 | ForEach-Object {
