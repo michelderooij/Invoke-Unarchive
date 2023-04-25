@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.06, April 25th, 2023
+    Version 1.07, April 25th, 2023
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -49,6 +49,7 @@
             Fixed detection of throttling and honoring backoff period
     1.05    Added progress bar for significant backoff/wait delays
     1.06    Fixed reporting of EWS error status
+    1.07    Fixed logic after throttling to reset generic delay
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -342,20 +343,22 @@ begin {
             }
         }
         Else {
-            If( $script:SleepTimer['Current'] -lt $script:SleepTimer['Max']) {
-                $script:SleepTimer['Current']= [int]([math]::Min( ($script:SleepTimer['Current'] * $script:Factors['Inc']), $script:SleepTimer['Max']))
-                $script:FolderBatchSize['Current']= [int]([math]::Max( [int]($script:FolderBatchSize['Current'] * $script:Factors['Dec']), $script:FolderBatchSize['Min']))
-                $script:ItemBatchSize['Current']= [int]([math]::Max( [int]($script:ItemBatchSize['Current'] * $script:Factors['Dec']), $script:ItemBatchSize['Min']))
-            }
-
             $waitMs= [int]($script:BackOffMilliseconds)
             If( $waitMs -eq 0) {
                 # Use our 'calculated' backoff period
-                $waitMs= $script:SleepTimer['Current']
+
+                If( $script:SleepTimer['Current'] -lt $script:SleepTimer['Max']) {
+                    $script:SleepTimer['Current']= [int]([math]::Min( ($script:SleepTimer['Current'] * $script:Factors['Inc']), $script:SleepTimer['Max']))
+                    $script:FolderBatchSize['Current']= [int]([math]::Max( [int]($script:FolderBatchSize['Current'] * $script:Factors['Dec']), $script:FolderBatchSize['Min']))
+                    $script:ItemBatchSize['Current']= [int]([math]::Max( [int]($script:ItemBatchSize['Current'] * $script:Factors['Dec']), $script:ItemBatchSize['Min']))
+                }
+    
                 Write-Warning ('Previous EWS operation failed, waiting for {0:N0}s' -f ($script:SleepTimer['Current']/1000))
+                $waitMs= $script:SleepTimer['Current']
             }
             Else {
                 Write-Warning ('Throttling detected; server requested to backoff for {0:N0}s' -f ($waitMs/1000))
+                $script:SleepTimer['Current']= $waitMs
             }
         }
         If( $waitMS -ge 10000 -and !( $NoProgressBar)) {
