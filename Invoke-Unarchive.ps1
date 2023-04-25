@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.05, April 25th, 2023
+    Version 1.06, April 25th, 2023
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -47,7 +47,8 @@
             Added ExchangeSchema parameter
     1.04    Fixed unarchiving batches instead of whole set of items per folder
             Fixed detection of throttling and honoring backoff period
-    1.05    Added progress bar when backing off/waiting for retry
+    1.05    Added progress bar for significant backoff/wait delays
+    1.06    Fixed reporting of EWS error status
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -354,7 +355,7 @@ begin {
                 Write-Warning ('Previous EWS operation failed, waiting for {0:N0}s' -f ($script:SleepTimer['Current']/1000))
             }
             Else {
-                Write-Warning ('Throttling detected; server requested us to backoff for {0:N0}s' -f ($waitMs/1000))
+                Write-Warning ('Throttling detected; server requested to backoff for {0:N0}s' -f ($waitMs/1000))
             }
         }
         If( $waitMS -ge 10000 -and !( $NoProgressBar)) {
@@ -451,7 +452,7 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.InnerException.Status)
                 $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch {
@@ -523,7 +524,7 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.InnerException.Status)
             }
             catch {
                 $OpSuccess= $false
@@ -551,7 +552,7 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.InnerException.Status)
                 $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch {
