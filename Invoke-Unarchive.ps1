@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.04, April 24th, 2023
+    Version 1.05, April 25th, 2023
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -47,6 +47,7 @@
             Added ExchangeSchema parameter
     1.04    Fixed unarchiving batches instead of whole set of items per folder
             Fixed detection of throttling and honoring backoff period
+    1.05    Added progress bar when backing off/waiting for retry
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -197,7 +198,7 @@ begin {
     # Process folders these batches
     $script:FolderBatchSize= @{ Min=10; Max=100; Current=100}
     # Process items in these page sizes
-    $script:ItemBatchSize= @{ Min=10; Max=100; Current=50}
+    $script:ItemBatchSize= @{ Min=25; Max=250; Current=25}
     # Sleep timers (ms) to backoff EWS operations
     $script:SleepTimer= @{ Min=100; Max=300000; Current= 250}
     # TuningFactors
@@ -335,9 +336,8 @@ begin {
                 $script:ItemBatchSize['Current']= [int]([math]::Min( ($script:ItemBatchSize['Current'] * $script:Factors['Inc']), $script:ItemBatchSize['Max']))
             }
             $waitMs= $script:SleepTimer['Current']
-            If( $waitMs -gt 5000) {
-                # Only show notice when delay is over 5s
-                Write-Verbose ('Waiting for {0}ms to be nice to the back-end' -f $waitMs)
+            If( $waitMs -gt 10000) {
+                Write-Verbose ('Waiting for {0:N0}s to be nice to the back-end' -f ($waitMs/1000))
             }
         }
         Else {
@@ -351,13 +351,24 @@ begin {
             If( $waitMs -eq 0) {
                 # Use our 'calculated' backoff period
                 $waitMs= $script:SleepTimer['Current']
-                Write-Warning ('Previous EWS operation failed, waiting for {0}ms' -f $script:SleepTimer['Current'])
+                Write-Warning ('Previous EWS operation failed, waiting for {0:N0}s' -f ($script:SleepTimer['Current']/1000))
             }
             Else {
-                Write-Warning ('Throttling detected; server requested us to backoff for {0}ms' -f $waitMs)
+                Write-Warning ('Throttling detected; server requested us to backoff for {0:N0}s' -f ($waitMs/1000))
             }
         }
-        Start-Sleep -Milliseconds $waitMs
+        If( $waitMS -ge 10000 -and !( $NoProgressBar)) {
+            # When waiting for >10s, show a progress bar
+            $WaitUnit= [uint]($waitMS/10)
+            1..10 | ForEach-Object {
+                Write-Progress -Id 4 -Activity 'Waiting' -Status 'Waiting for back-end' -PercentComplete ($_ * 10)
+                Start-Sleep -Milliseconds $WaitUnit
+            }
+            Write-Progress -Id 4 -Activity 'Waiting' -Status 'Done' -Completed
+        }
+        Else {
+            Start-Sleep -Milliseconds $waitMs
+        }
         $script:BackOffMilliseconds= 0
     }
 
@@ -377,13 +388,13 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.Message)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.InnerException.Status)
                 $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch {
                 $OpSuccess= $false
                 $critErr= $true
-                Write-Warning ('Error performing operation FindFolders with Search options in {0}. Error: {1}' -f $FolderId.FolderName, $_.Exception.Message)
+                Write-Warning ('Error performing operation FindFolders with Search options in {0}. Error: {1}' -f $FolderId.FolderName, $_.Exception.InnerException.Message)
             }
             finally {
                 If ( !$critErr) { Optimize-OperationalParameters $OpSuccess }
@@ -406,17 +417,17 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.InnerException.Status)
                 $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch [Microsoft.Exchange.WebServices.Data.ServiceRequestException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation ({0}) failed, will retry later' -f $_.Exception.ErrorCode)
+                Write-Warning ('EWS operation ({0}) failed, will retry later' -f $_.Exception.InnerException.Status)
             }
             catch {
                 $OpSuccess= $false
                 $critErr= $true
-                Write-Warning ('Error performing operation MoveFolder on {0}. Error: {1}' -f $SourceFolder.DisplayName, $_.Exception.Message)
+                Write-Warning ('Error performing operation MoveFolder on {0}. Error: {1}' -f $SourceFolder.DisplayName, $_.Exception.InnerException.Message)
             }
             finally {
                 If ( !$critErr) { Optimize-OperationalParameters $OpSuccess }
@@ -451,7 +462,7 @@ begin {
                 Else {
                     $OpSuccess= $false
                     $critErr= $true
-                    Write-Warning ('Error deleting folder {0}: {1}' -f $Folder.DisplayName, $_.Exception.Message)
+                    Write-Warning ('Error deleting folder {0}: {1}' -f $Folder.DisplayName, $_.Exception.InnerException.Message)
                 }
            }
            finally {
@@ -477,17 +488,17 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.InnerException.Status)
                 $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch [Microsoft.Exchange.WebServices.Data.ServiceRequestException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.InnerException.Status)
             }
             catch {
                 $OpSuccess= $false
                 $critErr= $true
-                Write-Warning ('Error performing operation MoveItems on {0}. Error: {1}' -f $Folder.DisplayName, $_.Exception.Message)
+                Write-Warning ('Error performing operation MoveItems on {0}. Error: {1}' -f $Folder.DisplayName, $_.Exception.InnerException.Message)
             }
             finally {
                 If ( !$critErr) { Optimize-OperationalParameters $OpSuccess }
@@ -517,7 +528,7 @@ begin {
             catch {
                 $OpSuccess= $false
                 $critErr= $true
-                Write-Warning ('Error performing operation FindFolders without Search options in {0}. Error: {1}' -f $Folder.Id.FolderName, $_.Exception.Message)
+                Write-Warning ('Error performing operation FindFolders without Search options in {0}. Error: {1}' -f $Folder.Id.FolderName, $_.Exception.InnerException.Message)
             }
             finally {
                 If ( !$critErr) { Optimize-OperationalParameters $OpSuccess }
@@ -546,7 +557,7 @@ begin {
             catch {
                 $OpSuccess= $false
                 $critErr= $true
-                Write-Warning ('Error performing operation FindItems without Search options in {0}: {1}' -f $Folder.DisplayName, $_.Exception.Message)
+                Write-Warning ('Error performing operation FindItems without Search options in {0}: {1}' -f $Folder.DisplayName, $_.Exception.InnerException.Message)
             }
             finally {
                 If ( !$critErr) { Optimize-OperationalParameters $OpSuccess }
@@ -693,7 +704,7 @@ begin {
                                 $null= myEWSMove-Items -EwsService $EwsService -ItemIds $ItemBatch -Folder $Target
                             }
                             catch {
-                                Write-Error ('Problem unarchiving items from folder {0}: {1}' -f $prettyCurrentPath, $_.Exception.Message)
+                                Write-Error ('Problem unarchiving items from folder {0}: {1}' -f $prettyCurrentPath, $_.Exception.InnerException.Message)
                             }
                         }
                         $ItemBatch= [Activator]::CreateInstance( $ItemType)
@@ -851,6 +862,7 @@ begin {
     }
 
     $EwsService.EnableScpLookup= if( $NoSCP) { $false } else { $true }
+    $EwsService.Timeout= $script:SleepTimer['Max']
 
     If( $TrustAll) {
         Set-SSLVerification -Disable
