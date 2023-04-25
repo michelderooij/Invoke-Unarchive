@@ -391,7 +391,7 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.InnerException.Status)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
                 $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch {
@@ -420,7 +420,7 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.InnerException.Status)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
                 $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch [Microsoft.Exchange.WebServices.Data.ServiceRequestException] {
@@ -454,7 +454,7 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.InnerException.Status)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
                 $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch {
@@ -491,7 +491,7 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.InnerException.Status)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
                 $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch [Microsoft.Exchange.WebServices.Data.ServiceRequestException] {
@@ -526,7 +526,7 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.InnerException.Status)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
             }
             catch {
                 $OpSuccess= $false
@@ -554,7 +554,7 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.InnerException.Status)
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
                 $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch {
@@ -590,7 +590,7 @@ begin {
             }
             catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
                 $OpSuccess= $false
-                Write-Warning 'EWS operation failed, server busy - will retry later'
+                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
                 $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
             }
             catch {
