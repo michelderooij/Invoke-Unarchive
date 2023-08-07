@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.10, April 25th, 2023
+    Version 1.11, August 7th, 2023
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -53,6 +53,7 @@
     1.08    Further tuned calculated delays
     1.09    Removed non-functional ExchangeSchema input options
     1.10    Fixed ServerBusy reporting
+    1.11    Changed OAuth to use dummy creds to prevent 'Credentials are required to make a service request' issue
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -811,6 +812,9 @@ begin {
     Else {
         # Use OAuth (and impersonation/X-AnchorMailbox always set)
         $Impersonation= $true
+
+        # Dummy creds to prevent "Credentials are required to make a service request" issue
+        $EwsService.Credentials= [System.Net.NetworkCredential]::new( '', ( ConvertTo-SecureString -String 'dummy' -AsPlainText -Force))
 
         If( $CertificateThumbprint -or $CertificateFile) {
             If( $CertificateFile) {
