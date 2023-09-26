@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.11, August 7th, 2023
+    Version 1.12, September 26th, 2023
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -54,6 +54,7 @@
     1.09    Removed non-functional ExchangeSchema input options
     1.10    Fixed ServerBusy reporting
     1.11    Changed OAuth to use dummy creds to prevent 'Credentials are required to make a service request' issue
+    1.12    Changed [uint] accelerator to [uint32] for PS5.1 compatibility
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -364,7 +365,7 @@ begin {
         }
         If( $waitMS -ge 5000 -and !( $NoProgressBar)) {
             # When waiting for >10s, show a progress bar
-            $WaitUnit= [uint]($waitMS/10)
+            $WaitUnit= [uint32]($waitMS/10)
             1..10 | ForEach-Object {
                 Write-Progress -Id 4 -Activity 'Waiting' -Status 'Waiting for back-end' -PercentComplete ($_ * 10)
                 Start-Sleep -Milliseconds $WaitUnit
