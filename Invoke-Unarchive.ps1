@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.3, March 6th, 2025
+    Version 1.31, March 6th, 2025
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -62,6 +62,8 @@
             Rewritten folder collection for better performance
             Refactored module loading
             Bumped required PowerShell version to 5
+    1.31    Fixed processing folders of more than 2 levels deep
+            Minor tweaks
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -231,9 +233,9 @@ param(
 begin {
 
     # Process folders these batches
-    $script:FolderBatchSize= @{ Min=10; Max=100; Current=100}
+    $script:FolderBatchSize= @{ Min=50; Max=500; Current=250}
     # Process items in these page sizes
-    $script:ItemBatchSize= @{ Min=10; Max=50; Current=100}
+    $script:ItemBatchSize= @{ Min=100; Max=500; Current=250}
     # Sleep timers (ms) to backoff EWS operations
     $script:SleepTimer= @{ Min=100; Max=300000; Current= 250}
     # TuningFactors
@@ -656,7 +658,7 @@ Function Set-SSLVerification {
             [string]$emailAddress
         )
         If ( $Folders) {
-            $FolderFilterSet= [System.Collections.ArrayList]@()
+            $FolderFilterSet= [System.Collections.ArrayList]::Synchronized(@())
             ForEach ( $Folder in $Folders) {
                 # Convert simple filter to (simple) regexp
                 $Parts= $Folder -match '^(?<root>\\)?(?<keywords>.*?)?(?<sub>\\\*)?$'
@@ -674,7 +676,7 @@ Function Set-SSLVerification {
                         'IncludeSubs'= [bool]$Matches.Sub
                         'OrigFilter' = [string]$Folder
                     }
-                    $FolderFilterSet.Add( $Obj) | Out-Null
+                    $null= $FolderFilterSet.Add( $Obj)
                     Write-Debug ($Obj -join ',')
                 }
             }
@@ -735,15 +737,15 @@ Function Set-SSLVerification {
         Do {
             $FolderSearchResults= myEWSFind-FoldersNoSearch -EwsService $EwsService -Folder $Folder -FolderView $FolderView
             ForEach ( $FolderItem in $FolderSearchResults) {
-                $FolderPath= Join-Path -Path '\' -ChildPath $FolderItem.DisplayName
-                $PathCache[$FolderItem.Id.Uniqueid]= $FolderPath
                 If( -not $ParentFolderCache[ $FolderItem.ParentFolderId.UniqueId]) {
                     $ParentFolderCache[ $FolderItem.ParentFolderId.UniqueId]= [Microsoft.Exchange.WebServices.Data.Folder]::Bind( $EwsService, $FolderItem.ParentFolderId)
                 }
                 $ParentFolder= $ParentFolderCache[ $FolderItem.ParentFolderId.UniqueId]
+                $FolderPath= Join-Path -Path $PathCache[ $FolderItem.ParentFolderId.Uniqueid] -ChildPath $FolderItem.DisplayName
+                $PathCache[$FolderItem.Id.Uniqueid]= $FolderPath
                 $Obj= New-Object -TypeName PSObject -Property @{
                     Folder= $FolderItem
-                    FolderPath= Join-Path -Path $PathCache[ $FolderItem.ParentFolderId.UniqueId] -ChildPath $FolderPath
+                    FolderPath= $FolderPath
                     ParentFolder= $ParentFolder
                     ParentFolderPath= $PathCache[ $FolderItem.ParentFolderId.UniqueId]
                 }
@@ -808,10 +810,10 @@ Function Set-SSLVerification {
         $Result= $True
 
         # Build list of matching (sub)folders to process
-        $FoldersToProcess= Get-SubFolders -EwsService $EwsService -Folder $Source -IncludeFilter $IncludeFilter -ExcludeFilter $ExcludeFilter | Sort-Object -Unique -Property {$_.FolderPath}
+        $FoldersToProcess= Get-SubFolders -EwsService $EwsService -Folder $Source -IncludeFilter $IncludeFilter -ExcludeFilter $ExcludeFilter
         Write-Debug ('Located {0} archive folders' -f $FoldersToProcess.Count)
 
-        $ExistingFolders= Get-SubFolders -EwsService $EwsService -Folder $Target | Sort-Object -Unique -Property {$_.FolderPath}
+        $ExistingFolders= Get-SubFolders -EwsService $EwsService -Folder $Target
         Write-Debug ('Collected {0} mailbox folders for destination mapping' -f $ExistingFolders.Count)
 
         If (!$NoProgressBar) {
@@ -829,6 +831,9 @@ Function Set-SSLVerification {
 
                 # Load first class properties (stats)
                 $SubFolder.Folder.Load()
+
+                Write-Host ('Checking {0} with {1} item(s) and {2} subfolder(s)' -f $SubFolder.FolderPath, $SubFolder.Folder.TotalCount, $SubFolder.Folder.ChildFolderCount)
+
                 If($SubFolder.Folder.TotalCount -ne 0 -or $SubFolder.Folder.ChildFolderCount -ne 0) {
 
                     # Determine if we need recreate or merge
@@ -841,7 +846,7 @@ Function Set-SSLVerification {
 
                         # Add newly created target folder to list of folders in mailbox
                         $NewExistingFolder= New-Object -TypeName PSObject -Property @{
-                            FolderPath      = Join-Path -Path $TargetParentFolder.FolderPath -ChildPath $SubFolder.Folder.DisplayName
+                            FolderPath      = Join-Path -Path $SubFolder.ParentFolderPath -ChildPath $SubFolder.Folder.DisplayName
                             Folder          = $TargetFolder
                             ParentFolderPath= $TargetParentFolder.FolderPath
                             ParentFolder    = $TargetParentFolder.ParentFolder
@@ -855,7 +860,6 @@ Function Set-SSLVerification {
 
                     # Move items plus folders to the matching or new target
                     If( $TargetFolder) {
-                        Write-Host ('Unarchiving contents of {0} with {1} item(s) and {2} folder(s)' -f $SubFolder.FolderPath, $SubFolder.Folder.TotalCount, $SubFolder.Folder.ChildFolderCount)
 
                         $SubFolder.Folder.Load()
                         If( $SubFolder.Folder.TotalCount -ne 0 ) {
@@ -866,12 +870,10 @@ Function Set-SSLVerification {
                             $ItemView.Traversal= [Microsoft.Exchange.WebServices.Data.ItemTraversal]::Shallow
                             $ItemView.PropertySet= New-Object Microsoft.Exchange.WebServices.Data.PropertySet(
                                 [Microsoft.Exchange.WebServices.Data.BasePropertySet]::IdOnly)
-                            $ItemType= ("System.Collections.Generic.List" + '`' + "1") -as 'Type'
-                            $ItemType= $ItemType.MakeGenericType([Microsoft.Exchange.WebServices.Data.ItemId] -as 'Type')
+                            $ItemsToProcess = [System.Collections.Concurrent.ConcurrentBag[Microsoft.Exchange.WebServices.Data.ItemId]]::new()
 
                             # First, collect all Item Ids in current folder
-                            Write-Verbose ('Looking for items to unarchive from {0} ..' -f $SubFolder.FolderPath)
-                            $ItemsToProcess= [Activator]::CreateInstance( $ItemType)
+                            Write-Verbose ('Looking for items to unarchive in {0} ..' -f $SubFolder.FolderPath)
                             Do {
                                 $ItemResults= myEWSFind-ItemsNoSearch -EwsService $EwsService -Folder $SubFolder.Folder -ItemView $ItemView
                                 $ItemsFound+= $ItemResults.Items.Count
@@ -890,7 +892,7 @@ Function Set-SSLVerification {
                             }
 
                             # Chop set of items in chunks to process
-                            $ItemBatch= [Activator]::CreateInstance( $ItemType)
+                            $ItemBatch= [System.Collections.Concurrent.ConcurrentBag[Microsoft.Exchange.WebServices.Data.ItemId]]::new()
                             $ItemsProcessed=0
                             ForEach( $Item in $ItemsToProcess) {
                                 $ItemBatch.Add( $Item)
@@ -907,11 +909,17 @@ Function Set-SSLVerification {
                                             $null= myEWSMove-Items -EwsService $EwsService -ItemIds $ItemBatch -Folder $TargetFolder
                                         }
                                         catch {
-                                            Write-Error ('Problem unarchiving items from folder {0}: {1}' -f $SubFolder.FolderPath, $_.Exception.InnerException.Message)
+                                            Write-Error ('Problem unarchiving items from folder {0}: {1}' -f $SubFolder.FolderPath, $_.Exception.Message)
                                             $Result= $False
                                         }
                                     }
-                                    $ItemBatch= [Activator]::CreateInstance( $ItemType)
+                                    $ItemBatch.Clear()
+                                }
+
+                                # When processing a lot of items, do some garbage collection
+                                if ($ItemsProcessed % 1000 -eq 0) {
+                                    [System.GC]::Collect()
+                                    $null = [System.GC]::WaitForPendingFinalizers()
                                 }
                             }
                         }
@@ -940,8 +948,10 @@ Function Set-SSLVerification {
         } # ForEach SubFolder
 
         $FoldersProcessed= 0
-        # Process deepest folder first
-        $FoldersToClean= $FoldersToProcess | Sort-Object -Property {$_.FolderPath} -Descending
+        # Process folders but now start at the end (bottom up and depth first)
+        $FoldersToClean= $FoldersToProcess.Clone()
+        $FoldersToClean.Remove( $FoldersToClean[0]) # Do not try cleaning up root folder
+        $FoldersToClean.Reverse()
         ForEach ( $SubFolder in $FoldersToClean) {
 
             If (!$NoProgressBar) {
@@ -956,7 +966,7 @@ Function Set-SSLVerification {
                 If ( $Force -or $PSCmdlet.ShouldProcess( ('Removing empty archive folder {0}' -f $SubFolder.FolderPath))) {
                     Try {
                         If( myEWSDelete-Folder -EwsService $EwsService -Folder $SubFolder.Folder -DeleteMode 'HardDelete') {
-                            Write-Host ('Empty archive folder {0} removed' -f $SubFolder.FolderPath)
+                            Write-Verbose ('Empty archive folder {0} removed' -f $SubFolder.FolderPath)
                         }
                     }
                     Catch {
@@ -1066,6 +1076,8 @@ Function Set-SSLVerification {
 
     $EwsService.EnableScpLookup= if( $NoSCP) { $false } else { $true }
     $EwsService.Timeout= $script:SleepTimer['Max']
+    $EwsService.KeepAlive= $true
+    $EwsService.AcceptGzipEncoding= $true
 
     If( $TrustAll) {
         Set-SSLVerification -Disable
