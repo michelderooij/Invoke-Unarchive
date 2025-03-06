@@ -9,20 +9,16 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.31, March 6th, 2025
+    Version 1.32, March 6th, 2025
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
     This can be useful when retention policies archived contents unintentionally, or when organizations want
-    to start adopting a large mailbox policy, abandoning archives archives. Note that all contents is
+    to start adopting a large mailbox policy, abandoning archives. Note that all contents is
     moved, including recoverable items, except for data that is part of any hold.
 
-    The script moves contents in the most optimal way:
-    1) Folders present in archive but not in primary mailbox, are moved in one operation (Folder.Move)
-    2) Folders present in archive and primary are merged
-       a) Items in that folder are moved batch-wise (Item.Move)
-       b) Subfolders are processed in the same way as 1 and 2 (and repeated when necessary).
-       c) Folder should be empty after a) and b), and if so will be removed.
+    The script moves contents by recreating folders if needed, and moving items back to the
+    primary mailbox batch-wise. After processing, emptied regular folders in the archive are removed.
 
     .LINK
     http://eightwone.com
@@ -64,6 +60,11 @@
             Bumped required PowerShell version to 5
     1.31    Fixed processing folders of more than 2 levels deep
             Minor tweaks
+    1.32    Removed obsolete function
+            Functions now use approved verbs
+            Put Garbage Collection in place
+            Minor tweaks
+            Updated description in synopsis
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -233,9 +234,9 @@ param(
 begin {
 
     # Process folders these batches
-    $script:FolderBatchSize= @{ Min=50; Max=500; Current=250}
+    $script:FolderBatchSize= @{ Min=20; Max=250; Current=100}
     # Process items in these page sizes
-    $script:ItemBatchSize= @{ Min=100; Max=500; Current=250}
+    $script:ItemBatchSize= @{ Min=50; Max=250; Current=100}
     # Sleep timers (ms) to backoff EWS operations
     $script:SleepTimer= @{ Min=100; Max=300000; Current= 250}
     # TuningFactors
@@ -305,6 +306,7 @@ begin {
             }
             catch {
                 Write-Verbose ('Assembly {0} loading issue:{1}' -f $Name, $Error[0].Exception.Message)
+                Exit $ERR_DLLLOADING
             }
         }
         Else {
@@ -413,38 +415,7 @@ Function Set-SSLVerification {
         $script:BackOffMilliseconds= 0
     }
 
-    Function myEWSFind-Folders {
-        param(
-            [Microsoft.Exchange.WebServices.Data.ExchangeService]$EwsService,
-            [Microsoft.Exchange.WebServices.Data.FolderId]$FolderId,
-            [Microsoft.Exchange.WebServices.Data.SearchFilter+SearchFilterCollection]$FolderSearchCollection,
-            [Microsoft.Exchange.WebServices.Data.FolderView]$FolderView
-        )
-        $OpSuccess= $false
-        $CritErr= $false
-        Do {
-            Try {
-                $res= $EwsService.FindFolders( $FolderId, $FolderSearchCollection, $FolderView)
-                $OpSuccess= $true
-            }
-            catch [Microsoft.Exchange.WebServices.Data.ServerBusyException] {
-                $OpSuccess= $false
-                Write-Warning ('EWS operation failed ({0}), will retry later' -f $_.Exception.ErrorCode)
-                $script:BackOffMilliseconds= $_.Exception.BackOffMilliseconds
-            }
-            catch {
-                $OpSuccess= $false
-                $critErr= $true
-                Write-Warning ('Error performing operation FindFolders with Search options in {0}. Error: {1}' -f $FolderId.FolderName, $_.Exception.InnerException.Message)
-            }
-            finally {
-                If ( !$critErr) { Optimize-OperationalParameters $OpSuccess }
-            }
-        } while ( !$OpSuccess -and !$critErr)
-        Write-Output -NoEnumerate $res
-    }
-
-    Function myEWSDelete-Folder {
+    Function Remove-myEWSFolder {
         param(
             [Microsoft.Exchange.WebServices.Data.ExchangeService]$EwsService,
             [Microsoft.Exchange.WebServices.Data.Folder]$Folder,
@@ -483,7 +454,7 @@ Function Set-SSLVerification {
         Write-Output -NoEnumerate $res
     }
 
-    Function myEWSNew-Folder {
+    Function New-myEWSFolder {
         param(
             [Microsoft.Exchange.WebServices.Data.ExchangeService]$EwsService,
             [Microsoft.Exchange.WebServices.Data.Folder]$Folder,
@@ -520,7 +491,7 @@ Function Set-SSLVerification {
         Write-Output  $res
     }
 
-    Function myEWSMove-Items {
+    Function Move-myEWSItems {
         param(
             [Microsoft.Exchange.WebServices.Data.ExchangeService]$EwsService,
             $ItemIds,
@@ -555,7 +526,7 @@ Function Set-SSLVerification {
         Write-Output -NoEnumerate $res
     }
 
-    Function myEWSFind-FoldersNoSearch {
+    Function Find-myEWSFoldersNoSearch {
         param(
             [Microsoft.Exchange.WebServices.Data.ExchangeService]$EwsService,
             [Microsoft.Exchange.WebServices.Data.Folder]$Folder,
@@ -584,7 +555,7 @@ Function Set-SSLVerification {
         Write-Output -NoEnumerate $res
     }
 
-    Function myEWSFind-ItemsNoSearch {
+    Function Find-myEWSItemsNoSearch {
         param(
             [Microsoft.Exchange.WebServices.Data.ExchangeService]$EwsService,
             [Microsoft.Exchange.WebServices.Data.Folder]$Folder,
@@ -614,7 +585,7 @@ Function Set-SSLVerification {
         Write-Output -NoEnumerate $res
     }
 
-    Function myEWSBind-WellKnownFolder {
+    Function Get-myEWSBindWellKnownFolder {
         param(
             [Microsoft.Exchange.WebServices.Data.ExchangeService]$EwsService,
             [string]$WellKnownFolderName,
@@ -651,7 +622,7 @@ Function Set-SSLVerification {
         $res
     }
 
-    Function Construct-FolderFilter {
+    Function New-FolderFilter {
         param(
             [Microsoft.Exchange.WebServices.Data.ExchangeService]$EwsService,
             [string[]]$Folders,
@@ -697,7 +668,7 @@ Function Set-SSLVerification {
         # Construct regexp to see if allowed WKF is part of criteria string
         ForEach ( $ThisWKF in $AllowedWKF) {
             If ( $criteria -match '#{0}#') {
-                $criteria= $criteria -replace ('#{0}#' -f $ThisWKF), (myEWSBind-WellKnownFolder -EwsService $EwsService -WellKnownFolderName $ThisWKF -EmailAddress $emailAddress).DisplayName
+                $criteria= $criteria -replace ('#{0}#' -f $ThisWKF), (Get-myEWSBindWellKnownFolder -EwsService $EwsService -WellKnownFolderName $ThisWKF -EmailAddress $emailAddress).DisplayName
             }
         }
         return $criteria
@@ -735,7 +706,7 @@ Function Set-SSLVerification {
         $FolderView.PropertySet= New-Object Microsoft.Exchange.WebServices.Data.PropertySet(
             [Microsoft.Exchange.WebServices.Data.BasePropertySet]::IdOnly, $PropertySet)
         Do {
-            $FolderSearchResults= myEWSFind-FoldersNoSearch -EwsService $EwsService -Folder $Folder -FolderView $FolderView
+            $FolderSearchResults= Find-myEWSFoldersNoSearch -EwsService $EwsService -Folder $Folder -FolderView $FolderView
             ForEach ( $FolderItem in $FolderSearchResults) {
                 If( -not $ParentFolderCache[ $FolderItem.ParentFolderId.UniqueId]) {
                     $ParentFolderCache[ $FolderItem.ParentFolderId.UniqueId]= [Microsoft.Exchange.WebServices.Data.Folder]::Bind( $EwsService, $FolderItem.ParentFolderId)
@@ -842,7 +813,7 @@ Function Set-SSLVerification {
                     If( -not $MatchingFolder) {
                         # No match, create target in folder with matching parent folder path (breath-first, should exist)
                         $TargetParentFolder= $ExistingFolders | Where-Object { $_.FolderPath -eq $SubFolder.ParentFolderPath } | Select-Object -First 1
-                        $TargetFolder= myEWSNew-Folder -EwsService $EwsService -Folder $TargetParentFolder.Folder -DisplayName $SubFolder.Folder.DisplayName -FolderClass $SubFolder.Folder.FolderClass
+                        $TargetFolder= New-myEWSFolder -EwsService $EwsService -Folder $TargetParentFolder.Folder -DisplayName $SubFolder.Folder.DisplayName -FolderClass $SubFolder.Folder.FolderClass
 
                         # Add newly created target folder to list of folders in mailbox
                         $NewExistingFolder= New-Object -TypeName PSObject -Property @{
@@ -870,12 +841,12 @@ Function Set-SSLVerification {
                             $ItemView.Traversal= [Microsoft.Exchange.WebServices.Data.ItemTraversal]::Shallow
                             $ItemView.PropertySet= New-Object Microsoft.Exchange.WebServices.Data.PropertySet(
                                 [Microsoft.Exchange.WebServices.Data.BasePropertySet]::IdOnly)
-                            $ItemsToProcess = [System.Collections.Concurrent.ConcurrentBag[Microsoft.Exchange.WebServices.Data.ItemId]]::new()
+                            $ItemsToProcess = [System.Collections.ArrayList]::Synchronized([System.Collections.ArrayList]@())
 
                             # First, collect all Item Ids in current folder
                             Write-Verbose ('Looking for items to unarchive in {0} ..' -f $SubFolder.FolderPath)
                             Do {
-                                $ItemResults= myEWSFind-ItemsNoSearch -EwsService $EwsService -Folder $SubFolder.Folder -ItemView $ItemView
+                                $ItemResults= Find-myEWSItemsNoSearch -EwsService $EwsService -Folder $SubFolder.Folder -ItemView $ItemView
                                 $ItemsFound+= $ItemResults.Items.Count
                                 If (!$NoProgressBar) {
                                     Write-Progress -Id 3 -Activity ('Unarchiving items in folder {0}' -f $SubFolder.FolderPath) -Status ('Discovered {0} items' -f $ItemsFound)
@@ -892,36 +863,34 @@ Function Set-SSLVerification {
                             }
 
                             # Chop set of items in chunks to process
-                            $ItemBatch= [System.Collections.Concurrent.ConcurrentBag[Microsoft.Exchange.WebServices.Data.ItemId]]::new()
+                            $ItemBatchIds = [System.Collections.Concurrent.ConcurrentBag[Microsoft.Exchange.WebServices.Data.ItemId]]::new()
                             $ItemsProcessed=0
                             ForEach( $Item in $ItemsToProcess) {
-                                $ItemBatch.Add( $Item)
+                                $ItemBatchIds.Add( $Item)
                                 $ItemsProcessed++
 
                                 # When cut-off for items or last item in batch reached, process the remainder
-                                If( $ItemBatch.Count -ge $script:ItemBatchSize['Current'] -or $ItemsProcessed -eq $ItemsFound) {
+                                If( $ItemBatchIds.Count -ge $script:ItemBatchSize['Current'] -or $ItemsProcessed -eq $ItemsFound) {
                                     If (!$NoProgressBar) {
                                         Write-Progress -Id 3 -Activity ('Processing folder {0}' -f $SubFolder.FolderPath) -Status ('Unarchived {0} items of {1}' -f $ItemsProcessed, $ItemsFound) -PercentComplete ( $ItemsProcessed / $ItemsFound * 100)
                                     }
                                     If ( $Force -or $PSCmdlet.ShouldProcess( ('Unarchiving {1} item(s) from folder {0}' -f $SubFolder.FolderPath, $ItemBatch.Count))) {
                                         try {
-                                            Write-Verbose ('Unarchiving {1}/{2} item(s) from {0}' -f $SubFolder.FolderPath, $ItemsProcessed, $ItemsFound)
-                                            $null= myEWSMove-Items -EwsService $EwsService -ItemIds $ItemBatch -Folder $TargetFolder
+                                            Write-Verbose ('Unarchiving {1} of {2} item(s) from {0}' -f $SubFolder.FolderPath, $ItemsProcessed, $ItemsFound)
+                                            $null= Move-myEWSItems -EwsService $EwsService -ItemIds $ItemBatchIds -Folder $TargetFolder
                                         }
                                         catch {
                                             Write-Error ('Problem unarchiving items from folder {0}: {1}' -f $SubFolder.FolderPath, $_.Exception.Message)
                                             $Result= $False
                                         }
                                     }
-                                    $ItemBatch.Clear()
-                                }
-
-                                # When processing a lot of items, do some garbage collection
-                                if ($ItemsProcessed % 1000 -eq 0) {
-                                    [System.GC]::Collect()
-                                    $null = [System.GC]::WaitForPendingFinalizers()
+                                    $ItemBatchIds.Clear()
                                 }
                             }
+
+                            # Perform some garbage collection
+                            [System.GC]::Collect()
+                            $null = [System.GC]::WaitForPendingFinalizers()
                         }
                         Else {
                             # No items to process in this folder
@@ -965,7 +934,7 @@ Function Set-SSLVerification {
             If($SubFolder.Folder.TotalCount -eq 0 -and $SubFolder.Folder.ChildFolderCount -eq 0) {
                 If ( $Force -or $PSCmdlet.ShouldProcess( ('Removing empty archive folder {0}' -f $SubFolder.FolderPath))) {
                     Try {
-                        If( myEWSDelete-Folder -EwsService $EwsService -Folder $SubFolder.Folder -DeleteMode 'HardDelete') {
+                        If( Remove-myEWSFolder -EwsService $EwsService -Folder $SubFolder.Folder -DeleteMode 'HardDelete') {
                             Write-Verbose ('Empty archive folder {0} removed' -f $SubFolder.FolderPath)
                         }
                     }
@@ -1124,12 +1093,12 @@ Process {
         }
 
         Write-Verbose 'Constructing folder matching rules'
-        $IncludeFilter= Construct-FolderFilter $EwsService $IncludeFolders $EmailAddress
-        $ExcludeFilter= Construct-FolderFilter $EwsService $ExcludeFolders $EmailAddress
+        $IncludeFilter= New-FolderFilter $EwsService $IncludeFolders $EmailAddress
+        $ExcludeFilter= New-FolderFilter $EwsService $ExcludeFolders $EmailAddress
 
-        $PrimaryRootFolder= myEWSBind-WellKnownFolder $EwsService 'MsgFolderRoot' $EmailAddress -ShowVersion
+        $PrimaryRootFolder= Get-myEWSBindWellKnownFolder $EwsService 'MsgFolderRoot' $EmailAddress -ShowVersion
         If ($null -ne $PrimaryRootFolder) {
-            $ArchiveRootFolder= myEWSBind-WellKnownFolder $EwsService 'ArchiveMsgFolderRoot' $EmailAddress
+            $ArchiveRootFolder= Get-myEWSBindWellKnownFolder $EwsService 'ArchiveMsgFolderRoot' $EmailAddress
             If ($null -ne $ArchiveRootFolder) {
                 Write-Verbose ('Unarchiving contents to mailbox of {0} ({1})' -f $EmailAddress, $CurrentIdentity)
                 If (! ( Move-MailboxContents -Identity $CurrentIdentity -Target $PrimaryRootFolder -Source $ArchiveRootFolder -EwsService $EwsService -emailAddress $emailAddress -IncludeFilter $IncludeFilter -ExcludeFilter $ExcludeFilter)) {
@@ -1148,9 +1117,9 @@ Process {
         }
 
         If($IncludeRecoverableItems.IsPresent) {
-            $RecoverableItemsDeletions= myEWSBind-WellKnownFolder $EwsService 'RecoverableItemsDeletions' $EmailAddress
+            $RecoverableItemsDeletions= Get-myEWSBindWellKnownFolder $EwsService 'RecoverableItemsDeletions' $EmailAddress
             If ($null -ne $RecoverableItemsDeletions) {
-                $ArchiveRecoverableItemsDeletions= myEWSBind-WellKnownFolder $EwsService 'ArchiveRecoverableItemsDeletions' $EmailAddress
+                $ArchiveRecoverableItemsDeletions= Get-myEWSBindWellKnownFolder $EwsService 'ArchiveRecoverableItemsDeletions' $EmailAddress
                 If ($null -ne $ArchiveRecoverableItemsDeletions) {
                     Write-Verbose ('Unarchiving recoverable deleted items from archive to mailbox of {0} ({1})' -f $EmailAddress, $CurrentIdentity)
                     If (! ( Move-MailboxContents -Identity $CurrentIdentity -Target $RecoverableItemsDeletions -Source $ArchiveRecoverableItemsDeletions -EwsService $EwsService -emailAddress $emailAddress -IncludeFilter $IncludeFilter -ExcludeFilter $ExcludeFilter)) {
