@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.33, December 18, 2025
+    Version 1.34, December 18, 2025
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -67,6 +67,7 @@
             Updated description in synopsis
     1.33    Added token refresh logic
             Added unloading modules when finished
+    1.34    Fixed folder filtering 
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -659,7 +660,7 @@ Function Set-SSLVerification {
             [string]$emailAddress
         )
         If ( $Folders) {
-            $FolderFilterSet= [System.Collections.ArrayList]::Synchronized(@())
+            $FolderFilterSet= [System.Collections.ArrayList]::Synchronized([System.Collections.ArrayList]::new())
             ForEach ( $Folder in $Folders) {
                 # Convert simple filter to (simple) regexp
                 $Parts= $Folder -match '^(?<root>\\)?(?<keywords>.*?)?(?<sub>\\\*)?$'
