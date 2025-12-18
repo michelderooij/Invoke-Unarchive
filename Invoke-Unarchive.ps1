@@ -9,7 +9,7 @@
     ENTIRE RISK OF THE USE OR THE RESULTS FROM THE USE OF THIS CODE REMAINS
     WITH THE USER.
 
-    Version 1.32, March 6th, 2025
+    Version 1.33, December 18, 2025
 
     .DESCRIPTION
     This script will process personal archives and reingest contents to their related primary mailbox.
@@ -65,6 +65,8 @@
             Put Garbage Collection in place
             Minor tweaks
             Updated description in synopsis
+    1.33    Added token refresh logic
+            Added unloading modules when finished
 
     .PARAMETER Identity
     Identity of the Mailbox. Can be CN/SAMAccountName (Exchange on-premises) or e-mail (Exchange on-prem & Exchange Online)
@@ -365,6 +367,34 @@ Function Set-SSLVerification {
             }
             else {
                 return $null
+            }
+        }
+    }
+
+    Function Invoke-OAuthTokenFresh {
+        # Refresh the OAuth token when it is close to expiring to keep EWS calls authenticated.
+        param(
+            [Microsoft.Exchange.WebServices.Data.ExchangeService]$Service
+        )
+
+        if(-not $App -or -not $Scopes) { return }
+        $expiresSoon= $false
+        if($Token) {
+            $expiresSoon= ($Token.ExpiresOn.UtcDateTime - (Get-Date).ToUniversalTime()) -lt ([TimeSpan]::FromMinutes(5))
+        }
+        else {
+            $expiresSoon= $true
+        }
+        if($expiresSoon) {
+            Write-Verbose ('Refreshing OAuth token; previous expiry {0}' -f ($Token?.ExpiresOn))
+            try {
+                $Response= $App.AcquireTokenForClient( $Scopes).executeAsync()
+                $Token= $Response.Result
+                $Service.Credentials= [Microsoft.Exchange.WebServices.Data.OAuthCredentials]$Token.AccessToken
+                Write-Verbose ('Refreshed OAuth token, new expiry {0}' -f $Token.ExpiresOn)
+            }
+            catch {
+                Write-Warning ('Failed to refresh OAuth token: {0}' -f $_.Exception.Message)
             }
         }
     }
@@ -916,6 +946,8 @@ Function Set-SSLVerification {
 
         } # ForEach SubFolder
 
+        Invoke-OAuthTokenFresh -Service $EwsService
+
         $FoldersProcessed= 0
         # Process folders but now start at the end (bottom up and depth first)
         $FoldersToClean= $FoldersToProcess.Clone()
@@ -949,6 +981,9 @@ Function Set-SSLVerification {
             }
 
         }
+
+        Invoke-OAuthTokenFresh -Service $EwsService
+
         If (!$NoProgressBar) {
             Write-Progress -Id 1 -Activity ('Processing {0}' -f $Identity) -Status 'Finished unarchiving.' -Completed
         }
@@ -1144,4 +1179,7 @@ End {
     If( $TrustAll) {
         Set-SSLVerification -Enable
     }
+
+    Remove-Module -Name 'Microsoft.Exchange.WebServices','Microsoft.Identity.Client' -ErrorAction SilentlyContinue
+
 }
